@@ -17,12 +17,14 @@ package zap
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/cloudwego/kitex/pkg/klog"
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.uber.org/zap"
@@ -115,18 +117,22 @@ func TestLogger(t *testing.T) {
 
 	span.End()
 
-	ctx, child := tracer.Start(ctx, "child")
-
-	klog.CtxWarnf(ctx, "foo %s", "bar")
+	ctx, child1 := tracer.Start(ctx, "child1")
 
 	klog.CtxTracef(ctx, "trace %s", "this is a trace log")
 	klog.CtxDebugf(ctx, "debug %s", "this is a debug log")
 	klog.CtxInfof(ctx, "info %s", "this is a info log")
+
+	child1.End()
+	assert.Equal(t, codes.Unset, child1.(sdktrace.ReadOnlySpan).Status().Code)
+
+	ctx, child2 := tracer.Start(ctx, "child2")
 	klog.CtxNoticef(ctx, "notice %s", "this is a notice log")
 	klog.CtxWarnf(ctx, "warn %s", "this is a warn log")
 	klog.CtxErrorf(ctx, "error %s", "this is a error log")
 
-	child.End()
+	child2.End()
+	assert.Equal(t, codes.Error, child2.(sdktrace.ReadOnlySpan).Status().Code)
 
 	_, errSpan := tracer.Start(ctx, "error")
 
@@ -235,41 +241,79 @@ func TestCtxKVLogger(t *testing.T) {
 		}
 	}()
 
+	tracer := otel.Tracer("test otel std logger")
+
 	klog.SetLogger(logger)
 	klog.SetOutput(buf)
 	klog.SetLevel(klog.LevelTrace)
 
-	for _, level := range []klog.Level{
+	for k, level := range []klog.Level{
 		klog.LevelTrace,
 		klog.LevelDebug,
 		klog.LevelInfo,
-		klog.LevelNotice,
-		klog.LevelWarn,
-		klog.LevelError,
-		// klog.LevelFatal,
 	} {
-		logger.CtxLogf(level, context.Background(), "log from origin zap %s=%s", "k1", "v1")
-		println(buf.String())
+		ctx, span := tracer.Start(ctx, fmt.Sprintf("child1-%d", k))
+		logger.CtxLogf(level, ctx, "log from origin zap %s=%s", "k1", "v1")
+
 		assert.True(t, strings.Contains(buf.String(), "log from origin zap"))
 		assert.True(t, strings.Contains(buf.String(), "k1"))
 		assert.True(t, strings.Contains(buf.String(), "v1"))
+		assert.Equal(t, codes.Unset, span.(sdktrace.ReadOnlySpan).Status().Code)
+
+		span.End()
 		buf.Reset()
 	}
 
-	for _, level := range []klog.Level{
-		klog.LevelTrace,
-		klog.LevelDebug,
-		klog.LevelInfo,
+	for k, level := range []klog.Level{
 		klog.LevelNotice,
 		klog.LevelWarn,
 		klog.LevelError,
 		// klog.LevelFatal,
 	} {
-		logger.CtxKVLog(context.Background(), level, "log from origin zap", "k1", "v1")
-		println(buf.String())
+		ctx, span := tracer.Start(ctx, fmt.Sprintf("child2-%d", k))
+		logger.CtxLogf(level, ctx, "log from origin zap %s=%s", "k1", "v1")
+
 		assert.True(t, strings.Contains(buf.String(), "log from origin zap"))
 		assert.True(t, strings.Contains(buf.String(), "k1"))
 		assert.True(t, strings.Contains(buf.String(), "v1"))
+		assert.Equal(t, codes.Error, span.(sdktrace.ReadOnlySpan).Status().Code)
+
+		span.End()
+		buf.Reset()
+	}
+
+	for k, level := range []klog.Level{
+		klog.LevelTrace,
+		klog.LevelDebug,
+		klog.LevelInfo,
+	} {
+		ctx, span := tracer.Start(ctx, fmt.Sprintf("child3-%d", k))
+		logger.CtxKVLog(ctx, level, "log from origin zap", "k1", "v1")
+
+		assert.True(t, strings.Contains(buf.String(), "log from origin zap"))
+		assert.True(t, strings.Contains(buf.String(), "k1"))
+		assert.True(t, strings.Contains(buf.String(), "v1"))
+		assert.Equal(t, codes.Unset, span.(sdktrace.ReadOnlySpan).Status().Code)
+
+		span.End()
+		buf.Reset()
+	}
+
+	for k, level := range []klog.Level{
+		klog.LevelNotice,
+		klog.LevelWarn,
+		klog.LevelError,
+		// klog.LevelFatal,
+	} {
+		ctx, span := tracer.Start(ctx, fmt.Sprintf("child4-%d", k))
+		logger.CtxKVLog(ctx, level, "log from origin zap", "k1", "v1")
+
+		assert.True(t, strings.Contains(buf.String(), "log from origin zap"))
+		assert.True(t, strings.Contains(buf.String(), "k1"))
+		assert.True(t, strings.Contains(buf.String(), "v1"))
+		assert.Equal(t, codes.Error, span.(sdktrace.ReadOnlySpan).Status().Code)
+
+		span.End()
 		buf.Reset()
 	}
 }
